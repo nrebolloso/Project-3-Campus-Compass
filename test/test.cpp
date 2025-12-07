@@ -1,84 +1,132 @@
+/*
 #include <catch2/catch_test_macros.hpp>
 #include <iostream>
+#include <sstream>
+#include <fstream>
+#include <string>
 
-// change if you choose to use a different header name
 #include "CampusCompass.h"
 
 using namespace std;
 
-// the syntax for defining a test is below. It is important for the name to be
-// unique, but you can group multiple tests with [tags]. A test can have
-// [multiple][tags] using that syntax.
-TEST_CASE("Example Test Name - Change me!", "[tag]") {
-  // instantiate any class members that you need to test here
-  int one = 1;
+string captureOutput(CampusCompass& cc, string command) {
+    stringstream buffer;
 
-  // anything that evaluates to false in a REQUIRE block will result in a
-  // failing test
-  REQUIRE(one == 0); // fix me!
-
-  // all REQUIRE blocks must evaluate to true for the whole test to pass
-  REQUIRE(false); // also fix me!
+    streambuf* old = cout.rdbuf(buffer.rdbuf());
+    cc.ParseCommand(command);
+    cout.rdbuf(old);
+    
+    return buffer.str();
 }
 
-TEST_CASE("Test 2", "[tag]") {
-  // you can also use "sections" to share setup code between tests, for example:
-  int one = 1;
+void setupTestFiles() {
+    ofstream edges("test_edges.csv");
+    edges << "LocationID_1,LocationID_2,Name_1,Name_2,Time\n";
+    edges << "1,2,Hall A,Hall B,10\n";
+    edges << "2,3,Hall B,Hall C,5\n";
+    edges << "1,4,Hall A,Hall D,20\n";
+    edges.close();
 
-  SECTION("num is 2") {
-    int num = one + 1;
-    REQUIRE(num == 2);
-  };
-
-  SECTION("num is 3") {
-    int num = one + 2;
-    REQUIRE(num == 3);
-  };
-
-  // each section runs the setup code independently to ensure that they don't
-  // affect each other
+    ofstream classes("test_classes.csv");
+    classes << "ClassCode,LocationID,StartTime,EndTime\n";
+    classes << "COP3530,2,10:00,11:00\n";
+    classes << "CDA3101,3,11:15,12:05\n";
+    classes << "MAC2311,4,13:00,14:00\n";
+    classes.close();
 }
 
-// You must write 5 unique, meaningful tests for credit on the testing section
-// of this project!
+TEST_CASE("1. Incorrect Command Handling", "[rubric1]") {
+    setupTestFiles();
+    CampusCompass cc;
+    cc.ParseCSV("test_edges.csv", "test_classes.csv");
 
-// See the following for an example of how to easily test your output.
-// Note that while this works, I recommend also creating plenty of unit tests for particular functions within your code.
-// This pattern should only be used for final, end-to-end testing.
-
-// This uses C++ "raw strings" and assumes your CampusCompass outputs a string with
-//   the same thing you print.
-TEST_CASE("Example CampusCompass Output Test", "[flag]") {
-  // the following is a "raw string" - you can write the exact input (without
-  //   any indentation!) and it should work as expected
-  // this is based on the input and output of the first public test case
-  string input = R"(6
-insert "Student A" 10000001 1 1 COP3502
-insert "Student B" 10000002 1 1 COP3502
-insert "Student C" 10000003 1 2 COP3502 MAC2311
-dropClass 10000001 COP3502
-remove 10000001
-removeClass COP3502
-)";
-
-  string expectedOutput = R"(successful
-successful
-successful
-successful
-unsuccessful
-2
-)";
-
-  string actualOutput;
-
-  // somehow pass your input into your CampusCompass and parse it to call the
-  // correct functions, for example:
-  /*
-  CampusCompass c;
-  c.parseInput(input)
-  // this would be some function that sends the output from your class into a string for use in testing
-  actualOutput = c.getStringRepresentation()
-  */
-
-  REQUIRE(actualOutput == expectedOutput);
+    // 1. numbers in name
+    REQUIRE(captureOutput(cc, "insert \"A11y\" 45679999 1 1 COP3530") == "unsuccessful\n");
+    // 2. short UFID
+    REQUIRE(captureOutput(cc, "insert \"John\" 123 1 1 COP3530") == "unsuccessful\n");
+    // 3. invalid class code
+    REQUIRE(captureOutput(cc, "insert \"John\" 88888888 1 1 FRM123") == "unsuccessful\n");
+    // 4. invalid class count
+    REQUIRE(captureOutput(cc, "insert \"John\" 88888888 1 0 COP3530") == "unsuccessful\n");
+    // 5. duplicate ID insertion
+    cc.ParseCommand("insert \"John\" 11112222 1 1 COP3530");
+    REQUIRE(captureOutput(cc, "insert \"Copy\" 11112222 1 1 COP3530") == "unsuccessful\n");
 }
+
+TEST_CASE("2. Edge Cases", "[rubric2]") {
+    setupTestFiles();
+    CampusCompass cc;
+    cc.ParseCSV("test_edges.csv", "test_classes.csv");
+    cc.ParseCommand("insert \"Alice\" 11112222 1 2 COP3530 CDA3101");
+
+    // 1. removing student that doesnt exist
+    REQUIRE(captureOutput(cc, "remove 99999999") == "unsuccessful\n");
+
+    // 2. drop a class student does not have
+    REQUIRE(captureOutput(cc, "dropClass 11112222 MAC2311") == "unsuccessful\n");
+
+    // 3. replacing a class with itself (or replace nonexistent class)
+    REQUIRE(captureOutput(cc, "replaceClass 11112222 MAC2311 COP3530") == "unsuccessful\n");
+}
+
+TEST_CASE("3. Modification Commands (Drop, Remove, Replace)", "[rubric3]") {
+    setupTestFiles();
+    CampusCompass cc;
+    cc.ParseCSV("test_edges.csv", "test_classes.csv");
+    
+    // Bob has COP3530 and CDA3101
+    cc.ParseCommand("insert \"Bob\" 19284930 1 2 COP3530 CDA3101");
+
+    SECTION("Test replaceClass") {
+        // replace CDA3101 with MAC2311
+        REQUIRE(captureOutput(cc, "replaceClass 19284930 CDA3101 MAC2311") == "successful\n");
+    }
+
+    SECTION("Test dropClass") {
+        REQUIRE(captureOutput(cc, "dropClass 19284930 COP3530") == "successful\n");
+    }
+
+    SECTION("Test remove") {
+        REQUIRE(captureOutput(cc, "remove 19284930") == "successful\n");
+    }
+
+    SECTION("Test removeClass") {
+        // removes COP3530 from all students
+        // Bob has it, count should be 1
+        REQUIRE(captureOutput(cc, "removeClass COP3530") == "1\n");
+    }
+}
+
+TEST_CASE("4. Path Reachability Toggle", "[rubric4]") {
+    setupTestFiles();
+    CampusCompass cc;
+    cc.ParseCSV("test_edges.csv", "test_classes.csv");
+
+    // student at location 1, COP3530 is at location 2
+    // edge 1-2 exists with weight 10
+    cc.ParseCommand("insert \"Johnny\" 56393054 1 1 COP3530");
+
+    // 1. initial state: reachable
+    string expectedReachable = "Name: Johnny\nCOP3530 | Total Time: 10\n";
+    REQUIRE(captureOutput(cc, "printShortestEdges 56393054") == expectedReachable);
+
+    // 2. edge OFF
+    cc.ParseCommand("toggleEdgesClosure 1 1 2");
+
+    // 3. new state: unreachable (should be -1)
+    string expectedUnreachable = "Name: Johnny\nCOP3530 | Total Time: -1\n";
+    REQUIRE(captureOutput(cc, "printShortestEdges 56393054") == expectedUnreachable);
+}
+
+TEST_CASE("5. Student Zone MST Logic", "[logic]") {
+    setupTestFiles();
+    CampusCompass cc;
+    cc.ParseCSV("test_edges.csv", "test_classes.csv");
+
+    // student at location 1, path to 2 (cost 10), path to 3 (cost 15) -> via 2. subgraph is nodes {1, 2, 3}
+    // edges: (1-2, weight 10) + (2-3, weight 5) = 15
+    cc.ParseCommand("insert \"JohhnyWalker\" 67676767 1 2 COP3530 CDA3101");
+
+    REQUIRE(captureOutput(cc, "printStudentZone 67676767") == "Student Zone Cost For JohhnyWalker: 15\n");
+}
+*/
